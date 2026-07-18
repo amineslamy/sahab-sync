@@ -228,3 +228,130 @@ class Sahab_Sync_Exporter {
         }
     }
 }
+
+/**
+ * دریافت شناسه‌های اخبار فیلتر شده بر اساس پارامترهای فعال در فرانت‌اِند سحاب
+ * 
+ * @param array $filters آرایه پارامترهای ارسالی از داشبورد
+ * @return array آرایه ای از ID های پست‌های واجد شرایط
+ */
+function sahab_sync_get_filtered_post_ids( $filters = array() ) {
+    // پیش‌فرض‌ها و پاکسازی مقادیر ورودی
+    $f_id      = isset( $filters['f_id'] ) ? sanitize_text_field( $filters['f_id'] ) : '';
+    $f_case    = isset( $filters['f_case'] ) ? sanitize_text_field( $filters['f_case'] ) : '';
+    $f_subject = isset( $filters['f_subject'] ) ? sanitize_text_field( $filters['f_subject'] ) : '';
+    $f_type    = isset( $filters['f_type'] ) ? sanitize_text_field( $filters['f_type'] ) : '';
+    $f_expert  = isset( $filters['f_expert'] ) ? sanitize_text_field( $filters['f_expert'] ) : '';
+    $f_author  = isset( $filters['f_author'] ) ? sanitize_text_field( $filters['f_author'] ) : '';
+    $f_notes   = isset( $filters['f_notes'] ) ? sanitize_text_field( $filters['f_notes'] ) : '';
+
+    // ساخت آرگومان‌های پایه کوئری (فقط دریافت ID برای سرعت بسیار بالا)
+    $query_args = array(
+        'post_type'           => 'post',
+        'post_status'         => 'publish',
+        'posts_per_page'      => -1,
+        'fields'              => 'ids', // صرفه‌جویی شدید در مصرف حافظه سرور
+        'no_found_rows'       => true,
+        'ignore_sticky_posts' => true,
+    );
+
+    $meta_query = array( 'relation' => 'AND' );
+
+    // ۱. فیلتر کیس (دسته‌بندی‌ها)
+    if ( $f_case ) {
+        $category = get_term_by( 'name', $f_case, 'category' );
+        if ( $category && ! is_wp_error( $category ) ) {
+            $query_args['cat'] = (int) $category->term_id;
+        }
+    }
+
+    // ۲. فیلتر موضوع (ACF Checkbox Array)
+    if ( $f_subject ) {
+        $meta_query[] = array(
+            'key'     => 'subject',
+            'value'   => '"' . $f_subject . '"',
+            'compare' => 'LIKE',
+        );
+    }
+
+    // ۳. فیلتر نوع خبر (ACF Select)
+    if ( $f_type ) {
+        $meta_query[] = array(
+            'key'     => 'news_type',
+            'value'   => $f_type,
+            'compare' => '=',
+        );
+    }
+
+    if ( count( $meta_query ) > 1 ) {
+        $query_args['meta_query'] = $meta_query;
+    }
+
+    // اجرای کوئری بهینه شده
+    $post_ids = get_posts( $query_args );
+    $filtered_ids = array();
+
+    if ( empty( $post_ids ) ) {
+        return $filtered_ids;
+    }
+
+    // حلقه بررسی فیلترهای پیشرفته متنی و پی‌نوشت‌ها که مستقیماً در WP_Query مقدور نیستند
+    foreach ( $post_ids as $post_id ) {
+        
+        // ۴. فیلتر شماره اتوماسیون / شناسه خبر
+        if ( $f_id ) {
+            $automation_id = get_post_meta( $post_id, 'automation_id', true );
+            $automation_id = is_scalar( $automation_id ) ? (string) $automation_id : '';
+            $needle = trim( $f_id );
+            $match_id = false;
+
+            if ( $automation_id !== '' && stripos( $automation_id, $needle ) !== false ) {
+                $match_id = true;
+            }
+            if ( ! $match_id && preg_match( '/^AUTO-(\d+)$/i', $needle, $matches ) ) {
+                $match_id = (int) $matches[1] === $post_id;
+            }
+            if ( ! $match_id && preg_match( '/^\d+$/', $needle ) ) {
+                $match_id = (int) $needle === $post_id || ( $automation_id !== '' && (int) $needle === (int) $automation_id );
+            }
+
+            if ( ! $match_id ) {
+                continue; // عدم تطابق شناسه، رد کردن پست
+            }
+        }
+
+        // بررسی اطلاعات کارشناس و ثبت‌کننده
+        $author_id = (int) get_post_field( 'post_author', $post_id );
+        $expert_name = get_the_author_meta( 'display_name', $author_id );
+        
+        $creator_id = get_post_meta( $post_id, 'news_creator_id', true );
+        $creator_user = $creator_id ? get_userdata( (int) $creator_id ) : false;
+        $creator_name = ( $creator_user && ! empty( $creator_user->display_name ) ) ? $creator_user->display_name : $expert_name;
+
+        // ۵. فیلتر کارشناس
+        if ( $f_expert && stripos( $expert_name, $f_expert ) === false ) {
+            continue;
+        }
+
+        // ۶. فیلتر ثبت‌کننده خبر
+        if ( $f_author && stripos( $creator_name, $f_author ) === false ) {
+            continue;
+        }
+
+        // ۷. فیلتر پی‌نوشت‌ها (بر اساس تابع شمارش بومی پروژه)
+        if ( $f_notes && function_exists( 'flatsome_child_get_dashboard_comment_summary' ) ) {
+            $comments_summary = flatsome_child_get_dashboard_comment_summary( $post_id );
+            $valid_notes = array( 'note', 'theory', 'rewrite', 'misc' );
+            if ( in_array( $f_notes, $valid_notes, true ) ) {
+                if ( empty( $comments_summary[ $f_notes ] ) ) {
+                    continue;
+                }
+            }
+        }
+
+        // اگر پست از تمام فیلترهای فعال به سلامت عبور کرد
+        $filtered_ids[] = $post_id;
+    }
+
+    return $filtered_ids;
+}
