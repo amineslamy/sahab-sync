@@ -1,39 +1,37 @@
 <?php
-/**
- * Plugin Name: موتور همگام‌سازی آفلاین سحاب (Sahab Sync Engine)
- * Description: زیرسیستم اختصاصی انتقال داده میان سیستم‌های آفلاین کارشناسان و سیستم مرکزی مادر بدون تداخل شناسه.
- * Version: 1.0.0
- * Author: تیم توسعه سحاب
- * License: GPL2
- */
+/*
+Plugin Name: همگام‌ساز داده‌های سحاب
+Description: افزونه غیرمتمرکز انتقال پکیج‌های اطلاعاتی داشبورد سحاب با سیستم ورژنینگ پیشرفته
+Version: 2.0
+Author: کارشناس توسعه سحاب
+*/
 
 if (!defined('ABSPATH')) {
     exit;
 }
 
-define('SAHAB_SYNC_PATH', plugin_dir_path(__FILE__));
-define('SAHAB_SYNC_URL', plugin_dir_url(__FILE__));
+// لود کردن کلاس‌های اکسپورت و امپورت
+require_once plugin_dir_path(__FILE__) . 'includes/class-exporter.php';
+require_once plugin_dir_path(__FILE__) . 'includes/class-importer.php';
 
-require_once SAHAB_SYNC_PATH . 'includes/class-db-setup.php';
-require_once SAHAB_SYNC_PATH . 'includes/class-exporter.php';
+// راه‌اندازی ماژول‌ها
+add_action('plugins_loaded', 'init_sahab_sync_system');
 
-if (class_exists('Sahab_DB_Setup')) {
-    $sahab_db_setup = new Sahab_DB_Setup();
+function init_sahab_sync_system()
+{
+    new Sahab_Sync_Exporter();
+    new Sahab_Sync_Importer();
 }
 
-if (class_exists('Sahab_Sync_Exporter')) {
-    $sahab_sync_exporter = new Sahab_Sync_Exporter();
-}
-
-// ثبت منوی پیشخوان برای مدیریت و تست‌های توسعه
+// ساخت منوی پیشخوان سحاب (در صورتی که قبلا نساخته‌اید)
 add_action('admin_menu', 'sahab_sync_add_admin_menu');
 function sahab_sync_add_admin_menu()
 {
     add_menu_page(
         'همگام‌سازی سحاب',
-        'همگام‌سازی سحاب',
+        'پشتیبان سحاب',
         'edit_posts',
-        'sahab-sync-panel',
+        'sahab-sync-page',
         'sahab_sync_render_admin_page',
         'dashicons-cloud-upload',
         30
@@ -42,7 +40,7 @@ function sahab_sync_add_admin_menu()
 
 function sahab_sync_render_admin_page()
 {
-    require_once SAHAB_SYNC_PATH . 'admin/views/sync-page.php';
+    include_once plugin_dir_path(__FILE__) . 'admin/views/sync-page.php';
 }
 
 // ثبت شورت‌کد برای نمایش هم‌زمان در فرانت‌اِند (میز کار سحاب)
