@@ -5,10 +5,9 @@ if (!defined('ABSPATH')) {
 
 class Sahab_Sync_Importer
 {
-
     public function __construct()
     {
-        // هوک AJAX برای مدیریت آپلود و پردازش پکیج زیپ سحاب
+        // هوک‌های AJAX برای مدیریت آپلود و پردازش پکیج زیپ سحاب
         add_action('wp_ajax_sahab_sync_execute_import', array($this, 'handle_ajax_import'));
         add_action('wp_ajax_sahab_do_import', array($this, 'handle_ajax_import'));
     }
@@ -19,7 +18,7 @@ class Sahab_Sync_Importer
             check_ajax_referer('sahab_sync_nonce', 'security');
         }
 
-        if (!current_user_can('manage_options')) {
+        if (!current_user_can('edit_posts')) {
             wp_send_json_error(array('message' => 'شما دسترسی لازم برای ورود اطلاعات را ندارید.'));
         }
 
@@ -119,10 +118,11 @@ class Sahab_Sync_Importer
         // پاکسازی فایل‌های اکسترکت شده موقت از روی هارد
         $this->clean_temporary_dir($extract_dir);
 
+        // آماده‌سازی گزارش نهایی فرآیند
         if (($imported_count + $updated_count) > 0) {
-            $message = "تعداد {$imported_count} خبر وارد و {$updated_count} خبر به‌روزرسانی شد.";
+            $message = "تعداد {$imported_count} خبر جدید وارد و {$updated_count} خبر قبلی به‌روزرسانی شد.";
             if ($skipped_count > 0) {
-                $message .= " {$skipped_count} خبر از قبل یکسان یا تکراری بودند.";
+                $message .= "\n💡 تعداد {$skipped_count} خبر به دلیل تکراری بودن یا داشتن نسخه قدیمی‌تر نادیده گرفته شد.";
             }
 
             wp_send_json_success(array(
@@ -131,14 +131,15 @@ class Sahab_Sync_Importer
                 'updated' => $updated_count,
                 'skipped' => $skipped_count
             ));
+        } else {
+            // در صورتی که تمام پکیج تکراری باشد، به عنوان موفقیت بدون تغییر به فرانت‌اِند پاس داده می‌شود تا دکمه قفل نگردد
+            wp_send_json_success(array(
+                'message' => "اطلاعات این پکیج کاملاً با داده‌های فعلی سامانه یکسان است.\nهیچ داده جدید یا تغییریافته‌ای جهت درون‌ریزی یافت نشد (تعداد کل اخبار بررسی شده: {$skipped_count}).",
+                'imported' => 0,
+                'updated' => 0,
+                'skipped' => $skipped_count
+            ));
         }
-
-        wp_send_json_error(array(
-            'message' => 'هیچ داده جدیدی وارد نشد. تمامی اخبار موجود در این پکیج قبلاً همگام‌سازی شده‌اند یا با نسخه فعلی سیستم یکسان هستند.',
-            'imported' => $imported_count,
-            'updated' => $updated_count,
-            'skipped' => $skipped_count
-        ));
     }
 
     private function get_post_by_uuid($uuid)
@@ -148,7 +149,8 @@ class Sahab_Sync_Importer
             'meta_key' => 'sahab_uuid',
             'meta_value' => $uuid,
             'posts_per_page' => 1,
-            'post_status' => 'any'
+            'post_status' => 'any',
+            'no_found_rows' => true
         );
         $query = new WP_Query($args);
         return $query->have_posts() ? $query->posts[0] : null;
@@ -199,7 +201,7 @@ class Sahab_Sync_Importer
             }
         }
 
-        // همگام‌سازی دسته‌بندی‌ها و تگ‌ها
+        // همگام‌سازی دسته‌ب بندی‌ها و تگ‌ها
         if (!empty($data['taxonomies']) && is_array($data['taxonomies'])) {
             foreach ($data['taxonomies'] as $taxonomy => $terms) {
                 if (taxonomy_exists($taxonomy)) {
@@ -216,51 +218,53 @@ class Sahab_Sync_Importer
 
     private function import_media_file($post_id, $old_thumb_id, $extract_dir, $is_featured = false)
     {
-        // به دلیل اینکه نام فایل‌های اصلی در آرایه متا ذخیره نمی‌شوند، کل پوشه رسانه استخراج شده را اسکن می‌کنیم
         $media_folder = $extract_dir . '/media';
         if (!file_exists($media_folder) || !is_dir($media_folder)) {
             return;
         }
 
         $files = glob($media_folder . '/*');
-        if (empty($files))
+        if (empty($files)) {
             return;
+        }
 
         foreach ($files as $file_path) {
             $filename = basename($file_path);
 
-            // آپلود فیزیکی دیتای باینری فایل رسانه به کتابخانه مالتی‌مدیا وردپرس نود مقصد
             $wp_upload_dir = wp_upload_dir();
             $target_path = $wp_upload_dir['path'] . '/' . $filename;
 
-            copy($file_path, $target_path);
+            if (copy($file_path, $target_path)) {
+                $filetype = wp_check_filetype($filename, null);
+                $attachment = array(
+                    'guid' => $wp_upload_dir['url'] . '/' . $filename,
+                    'post_mime_type' => $filetype['type'],
+                    'post_title' => preg_replace('/\.[^.]+$/', '', $filename),
+                    'post_content' => '',
+                    'post_status' => 'inherit'
+                );
 
-            $filetype = wp_check_filetype($filename, null);
-            $attachment = array(
-                'guid' => $wp_upload_dir['url'] . '/' . $filename,
-                'post_mime_type' => $filetype['type'],
-                'post_title' => preg_replace('/\.[^.]+$/', '', $filename),
-                'post_content' => '',
-                'post_status' => 'inherit'
-            );
+                $attach_id = wp_insert_attachment($attachment, $target_path, $post_id);
 
-            $attach_id = wp_insert_attachment($attachment, $target_path, $post_id);
+                require_once(ABSPATH . 'wp-admin/includes/image.php');
+                if (!is_wp_error($attach_id)) {
+                    $attach_data = wp_generate_attachment_metadata($attach_id, $target_path);
+                    wp_update_attachment_metadata($attach_id, $attach_data);
 
-            require_once(ABSPATH . 'wp-admin/includes/image.php');
-            $attach_data = wp_generate_attachment_metadata($attach_id, $target_path);
-            wp_update_attachment_metadata($attach_id, $attach_data);
-
-            if ($is_featured) {
-                set_post_thumbnail($post_id, $attach_id);
-                break; // پس از ست کردن تصویر شاخص خارج می‌شویم
+                    if ($is_featured) {
+                        set_post_thumbnail($post_id, $attach_id);
+                        break;
+                    }
+                }
             }
         }
     }
 
     private function clean_temporary_dir($dir)
     {
-        if (!file_exists($dir))
+        if (!file_exists($dir)) {
             return;
+        }
         $files = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($dir, RecursiveDirectoryIterator::SKIP_DOTS),
             RecursiveIteratorIterator::CHILD_FIRST
