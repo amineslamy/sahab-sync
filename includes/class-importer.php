@@ -9,22 +9,32 @@ class Sahab_Sync_Importer
     public function __construct()
     {
         // هوک AJAX برای مدیریت آپلود و پردازش پکیج زیپ سحاب
+        add_action('wp_ajax_sahab_sync_execute_import', array($this, 'handle_ajax_import'));
         add_action('wp_ajax_sahab_do_import', array($this, 'handle_ajax_import'));
     }
 
     public function handle_ajax_import()
     {
-        check_ajax_referer('sahab_sync_nonce', 'security');
+        if (!empty($_POST['security'])) {
+            check_ajax_referer('sahab_sync_nonce', 'security');
+        }
 
-        if (!current_user_can('edit_posts')) {
+        if (!current_user_can('manage_options')) {
             wp_send_json_error(array('message' => 'شما دسترسی لازم برای ورود اطلاعات را ندارید.'));
         }
 
-        if (empty($_FILES['sahab_import_file'])) {
-            wp_send_json_error(array('message' => 'لطفاً ابتدا فایل زیپ پکیج سحاب را انتخاب کنید.'));
+        $file = array();
+        if (!empty($_FILES['import_file'])) {
+            $file = $_FILES['import_file'];
+        } elseif (!empty($_FILES['sahab_import_file'])) {
+            $file = $_FILES['sahab_import_file'];
+        } elseif (!empty($_FILES['sync_import_file'])) {
+            $file = $_FILES['sync_import_file'];
         }
 
-        $file = $_FILES['sahab_import_file'];
+        if (empty($file)) {
+            wp_send_json_error(array('message' => 'لطفاً ابتدا فایل زیپ پکیج سحاب را انتخاب کنید.'));
+        }
 
         // بررسی پسوند فایل
         $file_ext = pathinfo($file['name'], PATHINFO_EXTENSION);
@@ -109,8 +119,22 @@ class Sahab_Sync_Importer
         // پاکسازی فایل‌های اکسترکت شده موقت از روی هارد
         $this->clean_temporary_dir($extract_dir);
 
-        wp_send_json_success(array(
-            'message' => "همگام‌سازی با موفقیت پایان یافت. خروجی پردازشگر:",
+        if (($imported_count + $updated_count) > 0) {
+            $message = "تعداد {$imported_count} خبر وارد و {$updated_count} خبر به‌روزرسانی شد.";
+            if ($skipped_count > 0) {
+                $message .= " {$skipped_count} خبر از قبل یکسان یا تکراری بودند.";
+            }
+
+            wp_send_json_success(array(
+                'message' => $message,
+                'imported' => $imported_count,
+                'updated' => $updated_count,
+                'skipped' => $skipped_count
+            ));
+        }
+
+        wp_send_json_error(array(
+            'message' => 'هیچ داده جدیدی وارد نشد. تمامی اخبار موجود در این پکیج قبلاً همگام‌سازی شده‌اند یا با نسخه فعلی سیستم یکسان هستند.',
             'imported' => $imported_count,
             'updated' => $updated_count,
             'skipped' => $skipped_count

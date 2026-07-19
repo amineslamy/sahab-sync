@@ -198,6 +198,9 @@ function sahab_sync_enqueue_datepicker_assets()
     if (file_exists($plugin_assets_dir . '/js/jalali-datepicker.min.js')) {
         wp_enqueue_script('sahab-sync-datepicker-js', $plugin_assets_url . '/js/jalali-datepicker.min.js', array('jquery'), '1.0.0', true);
     }
+
+    // اطمینان از وجود اسکریپت دیت‌پیکر در ادپان/فرانت با وابستگی جی‌کوئری
+    wp_enqueue_script('sahab-sync-datepicker-bootstrap', $plugin_assets_url . '/js/jalali-datepicker.min.js', array('jquery'), '1.0.0', true);
 }
 
 // موتور پردازش زنده تعداد اخبار و پیش‌نمایش (AJAX)
@@ -394,9 +397,9 @@ function sahab_sync_render_frontend_shortcode()
                 <h4 style="margin-top:0; color:#1e293b; font-size:14px; margin-bottom:8px;">📥 بارگذاری و تحلیل پکیج
                     همگام‌سازی (.zip)</h4>
                 <div style="display: flex; align-items: center; gap: 15px; flex-wrap: wrap;">
-                    <input type="file" id="sahab_import_file" accept=".zip"
+                    <input type="file" id="sync_import_file" name="import_file" accept=".zip"
                         style="font-size: 12px; padding: 5px; background: #fff; border: 1px solid #cbd5e1; border-radius: 4px; max-width: 300px; width: 100%;">
-                    <button type="button" id="sahab_btn_import_submit"
+                    <button type="button" id="btn-execute-import"
                         style="padding: 0 20px; background: #10b981; color: #fff; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; font-size: 13px; height: 34px;">⚡
                         درون‌ریزی داده‌ها</button>
                 </div>
@@ -425,13 +428,12 @@ function sahab_sync_render_frontend_shortcode()
 
         jQuery(document).ready(function ($) {
             // فعال‌سازی و مقداردهی اولیه دیت‌پیکر شمسی
-            if ($.fn.persianDatepicker) {
-                $(".sahab-pwt-datepicker").persianDatepicker({
+            if ($.isFunction($.fn.persianDatepicker)) {
+                $('#sync_filter_date_from, #sync_filter_date_to').persianDatepicker({
                     initialValue: false,
-                    format: 'YYYY/MM/DD',
+                    format: 'YYYY-MM-DD',
                     autoClose: true,
-                    onSelect: function (unix) {
-                        // به محض انتخاب تاریخ، شمارش زنده مجدداً اجرا شود
+                    onSelect: function () {
                         updateLiveSyncPreview();
                     }
                 });
@@ -456,6 +458,14 @@ function sahab_sync_render_frontend_shortcode()
                 $.post('<?php echo admin_url('admin-ajax.php'); ?>', formData, function (response) {
                     if (response.success) {
                         $('#sync-live-count').text(response.data.count);
+
+                        // مدیریت فعال/غیرفعال‌سازی دکمه خروجی
+                        if (parseInt(response.data.count) === 0) {
+                            $('#btn-generate-package').prop('disabled', true).css({'opacity': '0.5', 'cursor': 'not-allowed'});
+                        } else {
+                            $('#btn-generate-package').prop('disabled', false).css({'opacity': '1', 'cursor': 'pointer'});
+                        }
+
                         var titleHtml = '';
                         
                         // بررسی هوشمند اینکه آیا کاربر فیلتری پر کرده است یا خیر
@@ -523,6 +533,45 @@ function sahab_sync_render_frontend_shortcode()
             $('#sync_clear_filters').on('click', function () {
                 document.getElementById('sahab-sync-advanced-filters').reset();
                 updateLiveSyncPreview();
+            });
+
+            $('#btn-execute-import').on('click', function (e) {
+                e.preventDefault();
+
+                var fileInput = $('#sync_import_file')[0].files[0];
+                if (!fileInput) {
+                    alert('❌ لطفا ابتدا فایل پکیج همگام‌سازی (.zip) را انتخاب کنید.');
+                    return;
+                }
+
+                var formData = new FormData();
+                formData.append('action', 'sahab_sync_execute_import');
+                formData.append('import_file', fileInput);
+                formData.append('security', '<?php echo esc_js(wp_create_nonce('sahab_sync_nonce')); ?>');
+
+                var $btn = $(this);
+                $btn.prop('disabled', true).html('<i class="dashicons dashicons-lightning"></i> ⏳ در حال درون‌ریزی داده‌ها...');
+
+                $.ajax({
+                    url: '<?php echo admin_url('admin-ajax.php'); ?>',
+                    type: 'POST',
+                    data: formData,
+                    contentType: false,
+                    processData: false,
+                    success: function (response) {
+                        $btn.prop('disabled', false).html('<i class="dashicons dashicons-lightning"></i> درون‌ریزی داده‌ها');
+                        if (response.success) {
+                            alert('✅ عملیات موفقیت‌آمیز بود!\n' + response.data.message);
+                            location.reload();
+                        } else {
+                            alert('⚠️ هشدار: ' + response.data.message);
+                        }
+                    },
+                    error: function () {
+                        $btn.prop('disabled', false).html('<i class="dashicons dashicons-lightning"></i> درون‌ریزی داده‌ها');
+                        alert('❌ خطای ارتباطی با سرور در هنگام پردازش پکیج.');
+                    }
+                });
             });
 
             updateLiveSyncPreview();
