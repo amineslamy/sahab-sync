@@ -81,13 +81,22 @@ class Sahab_Sync_Exporter {
                 update_post_meta($post_id, 'sahab_version_number', $version);
             }
 
-            $all_meta = get_post_custom($post_id);
+            // واکشی امن و استاندارد متادیتاها با حفظ ساختار آرایه‌ها و داده‌های سریالایز شده
             $clean_meta = array();
-            foreach ($all_meta as $key => $values) {
-                if (strpos($key, '_') === 0 && !in_array($key, array('_thumbnail_id', '_sahab_reg_date_shamsi'))) {
-                    continue;
+            $meta_keys = get_post_meta($post_id); // دریافت لیست تمام کلیدهای متای این پست
+
+            if (!empty($meta_keys)) {
+                foreach ($meta_keys as $key => $values) {
+                    // نادیده گرفتن متادیتاهای مخفی سیستم، به جز تصویر شاخص و تاریخ شمسی سحاب
+                    if (strpos($key, '_') === 0 && !in_array($key, array('_thumbnail_id', '_sahab_reg_date_shamsi'))) {
+                        continue;
+                    }
+
+                    // استفاده از get_post_meta استاندارد به همراه تبدیل خودکار داده‌های سریالایز شده به آرایه واقعی
+                    $meta_value = get_post_meta($post_id, $key, true);
+
+                    $clean_meta[$key] = $meta_value;
                 }
-                $clean_meta[$key] = $values[0];
             }
 
             $title   = $post->post_title;

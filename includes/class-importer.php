@@ -191,10 +191,45 @@ class Sahab_Sync_Importer
         update_post_meta($post_id, 'sahab_version_number', $version);
         update_post_meta($post_id, 'sahab_content_hash', $hash);
 
+        // ۱. بررسی و استخراج فیلد موضوع (subject) چه در دیتای اصلی چه در متادیتا
+        $raw_subject = null;
+        if (isset($data['subject'])) {
+            $raw_subject = $data['subject'];
+        } elseif (isset($data['metadata']['subject'])) {
+            $raw_subject = $data['metadata']['subject'];
+        }
+
+        // ۲. یکدست‌سازی و تبدیل فیلد موضوع به آرایه استاندارد برای ACF Checkbox
+        if ($raw_subject !== null) {
+            $final_subjects = array();
+
+            if (is_array($raw_subject)) {
+                // حالت آرایه جی‌سان
+                $final_subjects = $raw_subject;
+            } elseif (is_string($raw_subject)) {
+                // بررسی آرایه سریالایز شده پی‌اچ‌پی (تک موضوعی‌ها)
+                $unserialized = @unserialize($raw_subject);
+                if ($unserialized !== false || $raw_subject === 'b:0;') {
+                    $final_subjects = (array) $unserialized;
+                } else {
+                    // حالت رشته متنی ترکیب شده با جداکننده | 
+                    $final_subjects = array_map('trim', explode('|', $raw_subject));
+                }
+            }
+
+            // ذخیره اصولی فیلد متناسب با رفتار ACF تا باکس‌ها به درستی تیک بخورند
+            if (function_exists('update_field')) {
+                update_field('subject', $final_subjects, $post_id);
+            } else {
+                update_post_meta($post_id, 'subject', $final_subjects);
+            }
+        }
+
         // ثبت سایر متادیتاها و فیلدهای ACF
         if (!empty($data['metadata']) && is_array($data['metadata'])) {
             foreach ($data['metadata'] as $meta_key => $meta_value) {
-                if (in_array($meta_key, array('sahab_uuid', 'sahab_version_number', 'sahab_content_hash'))) {
+                // از این فیلدها عبور می‌کنیم چون قبلاً به صورت دستی یا اختصاصی پردازش شده‌اند
+                if (in_array($meta_key, array('sahab_uuid', 'sahab_version_number', 'sahab_content_hash', 'subject'))) {
                     continue;
                 }
                 update_post_meta($post_id, $meta_key, $meta_value);
