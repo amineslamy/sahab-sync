@@ -17,7 +17,7 @@ require_once SAHAB_SYNC_PATH . 'includes/class-exporter.php';
 require_once SAHAB_SYNC_PATH . 'includes/class-importer.php';
 
 /**
- * Returns an array of post IDs matching the given filters.
+ * Returns an array of post IDs matching the given filters (Fully synced with Sahab Dashboard Core).
  *
  * @param array $filters Associative array of filter values.
  * @return int[]
@@ -33,14 +33,10 @@ function sahab_sync_get_filtered_post_ids(array $filters): array
     );
 
     $meta_query = array('relation' => 'AND');
-    $tax_query  = array('relation' => 'AND');
 
-    $from = isset($filters['f_date_from'])
-        ? str_replace('-', '/', sanitize_text_field($filters['f_date_from']))
-        : '';
-    $to   = isset($filters['f_date_to'])
-        ? str_replace('-', '/', sanitize_text_field($filters['f_date_to']))
-        : '';
+    // ۱. فیلتر تاریخ وقوع بر اساس فرمت اسلش دیتابیس
+    $from = isset($filters['f_date_from']) ? str_replace('-', '/', sanitize_text_field($filters['f_date_from'])) : '';
+    $to   = isset($filters['f_date_to']) ? str_replace('-', '/', sanitize_text_field($filters['f_date_to'])) : '';
 
     if ($from !== '' && $to !== '') {
         $meta_query[] = array(
@@ -65,6 +61,7 @@ function sahab_sync_get_filtered_post_ids(array $filters): array
         );
     }
 
+    // ۲. فیلتر شناسه / شماره خبر (مطابق منطق اتوماسیون داشبورد سحاب)
     if (!empty($filters['f_id'])) {
         $post_id = absint($filters['f_id']);
         if ($post_id > 0) {
@@ -72,45 +69,89 @@ function sahab_sync_get_filtered_post_ids(array $filters): array
         }
     }
 
-    $taxonomy_map = array(
-        'f_case'    => 'news_case',
-        'f_type'    => 'news_type',
-        'f_subject' => 'news_subject',
-        'f_expert'  => 'news_expert',
-    );
-
-    foreach ($taxonomy_map as $filter_key => $taxonomy) {
-        if (!empty($filters[$filter_key])) {
-            $tax_query[] = array(
-                'taxonomy' => $taxonomy,
-                'field'    => 'slug',
-                'terms'    => sanitize_text_field($filters[$filter_key]),
-            );
+    // ۳. اصلاح کلیدی فیلتر کیس: انطباق متنی نام دسته با دسته‌بندی‌های بومی وردپرس (مطابق داشبورد هسته)
+    if (!empty($filters['f_case'])) {
+        $category = get_term_by('name', sanitize_text_field($filters['f_case']), 'category');
+        if ($category && !is_wp_error($category)) {
+            $args['cat'] = (int) $category->term_id;
         }
     }
 
-    if (!empty($filters['f_author'])) {
-        $author = get_user_by('login', sanitize_user($filters['f_author']));
-        if ($author) {
-            $args['author'] = $author->ID;
-        }
+    // ۴. فیلتر نوع خبر (ACF Meta Query - تطابق دقیق)
+    if (!empty($filters['f_type'])) {
+        $meta_query[] = array(
+            'key'     => 'news_type',
+            'value'   => sanitize_text_field($filters['f_type']),
+            'compare' => '=',
+        );
     }
 
-    if (!empty($filters['f_notes'])) {
-        $args['s'] = sanitize_text_field($filters['f_notes']);
+    // ۵. فیلتر موضوع خبر (ACF Meta Query - تطابق LIKE برای آرایه‌های سریالایز شده)
+    if (!empty($filters['f_subject'])) {
+        $meta_query[] = array(
+            'key'     => 'subject',
+            'value'   => '"' . sanitize_text_field($filters['f_subject']) . '"',
+            'compare' => 'LIKE',
+        );
     }
 
+    // تزریق فیلترهای متاداده به کوئری اصلی
     if (count($meta_query) > 1) {
         $args['meta_query'] = $meta_query;
     }
 
-    if (count($tax_query) > 1) {
-        $args['tax_query'] = $tax_query;
+    $query = new WP_Query($args);
+    $filtered_ids = array_map('intval', (array) $query->posts);
+
+    // ۶. لایه دوم فیلترینگ در حافظه (برای فیلترهای متنی کارشناس، ثبت‌کننده و پی‌نوشت‌ها)
+    if (empty($filtered_ids)) {
+        return array();
     }
 
-    $query = new WP_Query($args);
+    $final_ids = array();
+    foreach ($filtered_ids as $p_id) {
+        // فیلتر متنی کارشناس (Display Name)
+        if (!empty($filters['f_expert'])) {
+            $author_id = (int) get_post_field('post_author', $p_id);
+            $expert_name = get_the_author_meta('display_name', $author_id);
+            if (stripos($expert_name, sanitize_text_field($filters['f_expert'])) === false) {
+                continue;
+            }
+        }
 
-    return array_map('intval', (array) $query->posts);
+        // فیلتر متنی ثبت‌کننده (News Creator)
+        if (!empty($filters['f_author'])) {
+            $creator_id = get_post_meta($p_id, 'news_creator_id', true);
+            $creator_user = $creator_id ? get_userdata((int) $creator_id) : false;
+            $creator_name = ($creator_user && !empty($creator_user->display_name)) ? $creator_user->display_name : get_the_author_meta('display_name', (int) get_post_field('post_author', $p_id));
+            if (stripos($creator_name, sanitize_text_field($filters['f_author'])) === false) {
+                continue;
+            }
+        }
+
+        // فیلتر پی‌نوشت‌ها بر اساس ساختار کامنت‌های سحاب
+        if (!empty($filters['f_notes'])) {
+            $comments = get_comments(array('post_id' => $p_id, 'status' => 'approve', 'fields' => 'ids'));
+            $has_matching_note = false;
+            foreach ($comments as $c_id) {
+                $type = get_comment_meta($c_id, 'comment_type', true);
+                if ($filters['f_notes'] === 'misc' && !in_array($type, array('note', 'theory', 'rewrite'), true)) {
+                    $has_matching_note = true;
+                    break;
+                } elseif ($type === $filters['f_notes']) {
+                    $has_matching_note = true;
+                    break;
+                }
+            }
+            if (!$has_matching_note) {
+                continue;
+            }
+        }
+
+        $final_ids[] = $p_id;
+    }
+
+    return $final_ids;
 }
 
 add_action('plugins_loaded', 'init_sahab_sync_system');
@@ -416,18 +457,31 @@ function sahab_sync_render_frontend_shortcode()
                     if (response.success) {
                         $('#sync-live-count').text(response.data.count);
                         var titleHtml = '';
-                        if (response.data.posts && response.data.posts.length > 0) {
-                            titleHtml += '<strong>عناوین آخرین اخبار واجد شرایط:</strong><br>';
-                            response.data.posts.forEach(function (post) {
-                                titleHtml += '🔹 ' + post.title + '<br>';
-                            });
-                            if (response.data.count > 5) {
-                                titleHtml += 'و ' + (response.data.count - 5) + ' خبر دیگر...';
+                        
+                        // بررسی هوشمند اینکه آیا کاربر فیلتری پر کرده است یا خیر
+                        var isAnyFilterApplied = $('#sync_filter_date_from').val() || $('#sync_filter_date_to').val() || 
+                                                 $('#sync_filter_id').val() || $('#sync_filter_case').val() || 
+                                                 $('#sync_filter_type').val() || $('#sync_filter_subject').val() || 
+                                                 $('#sync_filter_expert').val() || $('#sync_filter_author').val() || 
+                                                 $('#sync_filter_notes').val();
+
+                        if (response.data.count > 0) {
+                            if (response.data.posts && response.data.posts.length > 0) {
+                                titleHtml += '<strong>عناوین آخرین اخبار واجد شرایط:</strong><br>';
+                                response.data.posts.forEach(function (post) {
+                                    titleHtml += '🔹 ' + post.title + '<br>';
+                                });
+                                if (response.data.count > 5) {
+                                    titleHtml += 'و ' + (response.data.count - 5) + ' خبر دیگر...';
+                                }
                             }
-                        } else if (response.data.count > 0 && (!response.data.posts || response.data.posts.length === 0)) {
-                            titleHtml = '🔹 پکیج شامل اخبار کل سیستم است (بدون اعمال ففیلتر خاص).';
+                            
+                            // نمایش متن صحیح برای حالت بدون فیلتر (کل سیستم)
+                            if (!isAnyFilterApplied) {
+                                titleHtml = '🔹 پکیج شامل اخبار کل سیستم است (بدون اعمال فیلتر خاص).';
+                            }
                         } else {
-                            titleHtml = '❌ هیچ خبری با این فیلترها همخوانی ندارد.';
+                            titleHtml = '❌ هیچ خبری با فیلترهای انتخابی همخوانی ندارد.';
                         }
                         $('#sync-live-titles').html(titleHtml);
                     } else {
