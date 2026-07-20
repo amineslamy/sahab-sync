@@ -107,6 +107,50 @@ class Sahab_Sync_Exporter {
             $content_hash = md5($hash_base);
             update_post_meta($post_id, 'sahab_content_hash', $content_hash);
 
+            // ====== بخش جدید: واکشی اختصاصی فایل‌های پیوست سه‌گانه سحاب ======
+            for ($i = 1; $i <= 3; $i++) {
+                $attachment_id = get_post_meta($post_id, "attachment_file_{$i}", true);
+                if (!empty($attachment_id)) {
+                    $file_path = get_attached_file($attachment_id);
+                    if ($file_path && file_exists($file_path)) {
+                        $media_files[basename($file_path)] = array(
+                            'absolute_path' => $file_path,
+                            'relative_path' => 'media/' . basename($file_path)
+                        );
+                    }
+                }
+            }
+
+            // ====== بخش جدید: واکشی کامنت‌های ساختاریافته به همراه متادیتای تحلیلی ======
+            $structured_comments = array();
+            $comments_query = get_comments(array(
+                'post_id' => $post_id,
+                'status'  => 'approve'
+            ));
+
+            foreach ($comments_query as $comment) {
+                $comment_type = get_comment_meta($comment->comment_ID, 'comment_type', true);
+                if (empty($comment_type)) {
+                    $comment_type = $comment->comment_type;
+                }
+
+                $comment_uuid = get_comment_meta($comment->comment_ID, 'sahab_comment_uuid', true);
+                if (empty($comment_uuid)) {
+                    $comment_uuid = function_exists('wp_generate_uuid4') ? wp_generate_uuid4() : wp_unique_id('comment-');
+                    update_comment_meta($comment->comment_ID, 'sahab_comment_uuid', $comment_uuid);
+                }
+
+                $structured_comments[] = array(
+                    'comment_uuid' => $comment_uuid,
+                    'author'       => $comment->comment_author,
+                    'content'      => $comment->comment_content,
+                    'date_gmt'     => $comment->comment_date_gmt,
+                    'analysis_metadata' => array(
+                        'comment_type' => $comment_type ? $comment_type : ''
+                    )
+                );
+            }
+
             $export_data[] = array(
                 'uuid'          => $uuid,
                 'version'       => (int)$version,
@@ -118,7 +162,8 @@ class Sahab_Sync_Exporter {
                 'date'          => $post->post_date,
                 'last_modified' => $post->post_modified,
                 'metadata'      => $clean_meta,
-                'taxonomies'    => $this->get_post_taxonomies_data($post_id)
+                'taxonomies'    => $this->get_post_taxonomies_data($post_id),
+                'structured_comments' => $structured_comments
             );
 
             // واکشی تصاویر شاخص

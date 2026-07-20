@@ -23,7 +23,7 @@ function sahab_sync_get_filtered_post_ids(array $filters): array
 {
     $args = array(
         'post_type' => 'post',
-        'post_status' => 'publish',
+        'post_status' => array('publish', 'inherit'),
         'posts_per_page' => -1,
         'fields' => 'ids',
         'no_found_rows' => true,

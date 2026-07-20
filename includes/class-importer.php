@@ -191,7 +191,34 @@ class Sahab_Sync_Importer
         update_post_meta($post_id, 'sahab_version_number', $version);
         update_post_meta($post_id, 'sahab_content_hash', $hash);
 
-        // ۱. بررسی و استخراج فیلد موضوع (subject) چه در دیتای اصلی چه در متادیتا
+        $media_folder = $extract_dir . '/media';
+
+        // ۱. پردازش و درون‌ریزی فایل‌های پیوست سه‌گانه واقعی
+        if (file_exists($media_folder) && is_dir($media_folder)) {
+            for ($i = 1; $i <= 3; $i++) {
+                $meta_field_key = "attachment_file_{$i}";
+                if (isset($data['metadata'][$meta_field_key])) {
+                    $old_file_value = $data['metadata'][$meta_field_key];
+                    if (!empty($old_file_value)) {
+                        $filename = basename($old_file_value);
+                        $local_file_path = $media_folder . '/' . $filename;
+
+                        if (file_exists($local_file_path)) {
+                            $new_attach_id = $this->insert_file_to_wp_media($local_file_path, $post_id);
+                            if ($new_attach_id) {
+                                if (function_exists('update_field')) {
+                                    update_field($meta_field_key, $new_attach_id, $post_id);
+                                } else {
+                                    update_post_meta($post_id, $meta_field_key, $new_attach_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // ۲. بررسی و استخراج فیلد موضوع (subject) چه در دیتای اصلی چه در متادیتا
         $raw_subject = null;
         if (isset($data['subject'])) {
             $raw_subject = $data['subject'];
@@ -225,18 +252,67 @@ class Sahab_Sync_Importer
             }
         }
 
-        // ثبت سایر متادیتاها و فیلدهای ACF
+        // ۴. ذخیره‌سازی ایمن سایر متادیتاها با توابع ACF برای جلوگیری از تداخل آرایه‌ها
         if (!empty($data['metadata']) && is_array($data['metadata'])) {
             foreach ($data['metadata'] as $meta_key => $meta_value) {
-                // از این فیلدها عبور می‌کنیم چون قبلاً به صورت دستی یا اختصاصی پردازش شده‌اند
-                if (in_array($meta_key, array('sahab_uuid', 'sahab_version_number', 'sahab_content_hash', 'subject'))) {
+                if (in_array($meta_key, array('sahab_uuid', 'sahab_version_number', 'sahab_content_hash', 'subject', 'attachment_file_1', 'attachment_file_2', 'attachment_file_3'))) {
                     continue;
                 }
-                update_post_meta($post_id, $meta_key, $meta_value);
+
+                if ($meta_key === 'reports_to') {
+                    if (function_exists('update_field')) {
+                        update_field($meta_key, $meta_value, $post_id);
+                    } else {
+                        update_post_meta($post_id, $meta_key, $meta_value);
+                    }
+                    continue;
+                }
+
+                if (function_exists('update_field')) {
+                    update_field($meta_key, $meta_value, $post_id);
+                } else {
+                    update_post_meta($post_id, $meta_key, $meta_value);
+                }
             }
         }
 
-        // همگام‌سازی دسته‌ب بندی‌ها و تگ‌ها
+        // ۵. پردازش و درون‌ریزی کامنت‌های تحلیلی چندلایه سحاب
+        if (!empty($data['structured_comments']) && is_array($data['structured_comments'])) {
+            foreach ($data['structured_comments'] as $c_data) {
+                $c_uuid = sanitize_text_field($c_data['comment_uuid']);
+
+                $existing_comments = get_comments(array(
+                    'meta_key'   => 'sahab_comment_uuid',
+                    'meta_value' => $c_uuid,
+                    'status'     => 'any',
+                    'fields'     => 'ids'
+                ));
+
+                $comment_arr = array(
+                    'comment_post_ID'  => $post_id,
+                    'comment_author'   => sanitize_text_field($c_data['author']),
+                    'comment_content'  => wp_kses_post($c_data['content']),
+                    'comment_date_gmt' => sanitize_text_field($c_data['date_gmt']),
+                    'comment_approved' => 1,
+                );
+
+                if (!empty($existing_comments)) {
+                    $comment_arr['comment_ID'] = $existing_comments[0];
+                    wp_update_comment($comment_arr);
+                    $comment_id = $existing_comments[0];
+                } else {
+                    $comment_id = wp_insert_comment($comment_arr);
+                }
+
+                if ($comment_id) {
+                    update_comment_meta($comment_id, 'sahab_comment_uuid', $c_uuid);
+                    update_comment_meta($comment_id, 'comment_type', sanitize_text_field($c_data['analysis_metadata']['comment_type']));
+                    update_comment_meta($comment_id, '_comment_type', 'field_6a50f060ebcfb');
+                }
+            }
+        }
+
+        // همگام‌سازی دسته‌بندی‌ها و تگ‌ها
         if (!empty($data['taxonomies']) && is_array($data['taxonomies'])) {
             foreach ($data['taxonomies'] as $taxonomy => $terms) {
                 if (taxonomy_exists($taxonomy)) {
@@ -245,54 +321,50 @@ class Sahab_Sync_Importer
             }
         }
 
-        // جابجایی و درون‌ریزی تصویر شاخص در صورت وجود در پوشه media پکیج
-        if (isset($data['metadata']['_thumbnail_id'])) {
-            $this->import_media_file($post_id, $data['metadata']['_thumbnail_id'], $extract_dir, true);
-        }
-    }
+        // درون‌ریزی تصویر شاخص در صورت وجود در پوشه media پکیج
+        if (isset($data['metadata']['_thumbnail_id']) && !empty($data['metadata']['_thumbnail_id'])) {
+            $thumb_value = $data['metadata']['_thumbnail_id'];
+            $thumb_filename = basename($thumb_value);
+            $thumb_path = $media_folder . '/' . $thumb_filename;
 
-    private function import_media_file($post_id, $old_thumb_id, $extract_dir, $is_featured = false)
-    {
-        $media_folder = $extract_dir . '/media';
-        if (!file_exists($media_folder) || !is_dir($media_folder)) {
-            return;
-        }
-
-        $files = glob($media_folder . '/*');
-        if (empty($files)) {
-            return;
-        }
-
-        foreach ($files as $file_path) {
-            $filename = basename($file_path);
-
-            $wp_upload_dir = wp_upload_dir();
-            $target_path = $wp_upload_dir['path'] . '/' . $filename;
-
-            if (copy($file_path, $target_path)) {
-                $filetype = wp_check_filetype($filename, null);
-                $attachment = array(
-                    'guid' => $wp_upload_dir['url'] . '/' . $filename,
-                    'post_mime_type' => $filetype['type'],
-                    'post_title' => preg_replace('/\.[^.]+$/', '', $filename),
-                    'post_content' => '',
-                    'post_status' => 'inherit'
-                );
-
-                $attach_id = wp_insert_attachment($attachment, $target_path, $post_id);
-
-                require_once(ABSPATH . 'wp-admin/includes/image.php');
-                if (!is_wp_error($attach_id)) {
-                    $attach_data = wp_generate_attachment_metadata($attach_id, $target_path);
-                    wp_update_attachment_metadata($attach_id, $attach_data);
-
-                    if ($is_featured) {
-                        set_post_thumbnail($post_id, $attach_id);
-                        break;
-                    }
+            if (file_exists($thumb_path)) {
+                $attach_id = $this->insert_file_to_wp_media($thumb_path, $post_id);
+                if ($attach_id) {
+                    set_post_thumbnail($post_id, $attach_id);
                 }
             }
         }
+    }
+
+    /**
+     * متد کمکی جدید جهت تزریق تمیز فایل فیزیکی به رسانه‌های وردپرس و تولید متاداده آن
+     */
+    private function insert_file_to_wp_media($file_path, $post_id)
+    {
+        $filename = basename($file_path);
+        $wp_upload_dir = wp_upload_dir();
+        $target_path = $wp_upload_dir['path'] . '/' . $filename;
+
+        if (copy($file_path, $target_path)) {
+            $filetype = wp_check_filetype($filename, null);
+            $attachment = array(
+                'guid'           => $wp_upload_dir['url'] . '/' . $filename,
+                'post_mime_type' => $filetype['type'],
+                'post_title'     => preg_replace('/\.[^.]+$/', '', $filename),
+                'post_content'   => '',
+                'post_status'    => 'inherit'
+            );
+
+            $attach_id = wp_insert_attachment($attachment, $target_path, $post_id);
+            require_once(ABSPATH . 'wp-admin/includes/image.php');
+            if (!is_wp_error($attach_id)) {
+                $attach_data = wp_generate_attachment_metadata($attach_id, $target_path);
+                wp_update_attachment_metadata($attach_id, $attach_data);
+                return $attach_id;
+            }
+        }
+
+        return false;
     }
 
     private function clean_temporary_dir($dir)
