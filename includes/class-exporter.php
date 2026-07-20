@@ -162,20 +162,36 @@ class Sahab_Sync_Exporter {
                 }
             }
 
+            // ====== بخش اصلاح تداخل کاربران ======
+            $author_id = $post->post_author;
+            $author_user = get_userdata($author_id);
+            $author_username = $author_user ? $author_user->user_login : '';
+
+            $creator_id = get_post_meta($post_id, 'news_creator_id', true);
+            $creator_username = '';
+            if (!empty($creator_id)) {
+                $creator_user = get_userdata($creator_id);
+                if ($creator_user) {
+                    $creator_username = $creator_user->user_login;
+                }
+            }
+
             $export_data[] = array(
-                'uuid'          => $uuid,
-                'version'       => (int)$version,
-                'content_hash'  => $content_hash,
-                'title'         => $title,
-                'content'       => $content,
-                'excerpt'       => $post->post_excerpt,
-                'status'        => $post->post_status,
-                'date'          => $post->post_date,
-                'last_modified' => $post->post_modified,
-                'metadata'      => $clean_meta,
-                'taxonomies'    => $this->get_post_taxonomies_data($post_id),
-                'structured_comments' => $structured_comments,
-                'revisions'     => $revisions_data
+                'uuid'                 => $uuid,
+                'version'              => (int)$version,
+                'content_hash'         => $content_hash,
+                'title'                => $title,
+                'content'              => $content,
+                'excerpt'              => $post->post_excerpt,
+                'status'               => $post->post_status,
+                'date'                 => $post->post_date,
+                'last_modified'        => $post->post_modified,
+                'author_username'      => $author_username,
+                'creator_username'     => $creator_username,
+                'metadata'             => $clean_meta,
+                'taxonomies'           => $this->get_post_taxonomies_data($post_id),
+                'structured_comments'  => $structured_comments,
+                'revisions'            => $revisions_data
             );
 
             // واکشی تصاویر شاخص

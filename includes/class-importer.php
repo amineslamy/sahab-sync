@@ -186,6 +186,16 @@ class Sahab_Sync_Importer
 
     private function sync_meta_and_taxonomies($post_id, $data, $version, $hash, $extract_dir)
     {
+        global $wpdb;
+
+        // ۱. تنظیم نویسنده اصلی خبر بر اساس نام کاربری مبدا
+        if (!empty($data['author_username'])) {
+            $target_author = get_user_by('login', $data['author_username']);
+            if ($target_author) {
+                $wpdb->update($wpdb->posts, array('post_author' => $target_author->ID), array('ID' => $post_id));
+            }
+        }
+
         // ثبت متادیتاهای پایه سحاب
         update_post_meta($post_id, 'sahab_uuid', $data['uuid']);
         update_post_meta($post_id, 'sahab_version_number', $version);
@@ -193,7 +203,7 @@ class Sahab_Sync_Importer
 
         $media_folder = $extract_dir . '/media';
 
-        // ۱. پردازش و درون‌ریزی فایل‌های پیوست سه‌گانه واقعی
+        // ۲. پردازش و درون‌ریزی فایل‌های پیوست سه‌گانه واقعی
         if (file_exists($media_folder) && is_dir($media_folder)) {
             for ($i = 1; $i <= 3; $i++) {
                 $meta_field_key = "attachment_file_{$i}";
@@ -218,7 +228,7 @@ class Sahab_Sync_Importer
             }
         }
 
-        // ۲. بررسی و استخراج فیلد موضوع (subject) چه در دیتای اصلی چه در متادیتا
+        // ۳. بررسی و استخراج فیلد موضوع (subject)
         $raw_subject = null;
         if (isset($data['subject'])) {
             $raw_subject = $data['subject'];
@@ -226,25 +236,19 @@ class Sahab_Sync_Importer
             $raw_subject = $data['metadata']['subject'];
         }
 
-        // ۲. یکدست‌سازی و تبدیل فیلد موضوع به آرایه استاندارد برای ACF Checkbox
         if ($raw_subject !== null) {
             $final_subjects = array();
-
             if (is_array($raw_subject)) {
-                // حالت آرایه جی‌سان
                 $final_subjects = $raw_subject;
             } elseif (is_string($raw_subject)) {
-                // بررسی آرایه سریالایز شده پی‌اچ‌پی (تک موضوعی‌ها)
                 $unserialized = @unserialize($raw_subject);
                 if ($unserialized !== false || $raw_subject === 'b:0;') {
                     $final_subjects = (array) $unserialized;
                 } else {
-                    // حالت رشته متنی ترکیب شده با جداکننده | 
                     $final_subjects = array_map('trim', explode('|', $raw_subject));
                 }
             }
 
-            // ذخیره اصولی فیلد متناسب با رفتار ACF تا باکس‌ها به درستی تیک بخورند
             if (function_exists('update_field')) {
                 update_field('subject', $final_subjects, $post_id);
             } else {
@@ -252,11 +256,20 @@ class Sahab_Sync_Importer
             }
         }
 
-        // ۴. ذخیره‌سازی ایمن سایر متادیتاها با توابع ACF برای جلوگیری از تداخل آرایه‌ها
+        // ۴. ذخیره‌سازی سایر متادیتاها و اصلاح فیلد ثبت‌کننده (news_creator_id)
         if (!empty($data['metadata']) && is_array($data['metadata'])) {
             foreach ($data['metadata'] as $meta_key => $meta_value) {
-                if (in_array($meta_key, array('sahab_uuid', 'sahab_version_number', 'sahab_content_hash', 'subject', 'attachment_file_1', 'attachment_file_2', 'attachment_file_3'))) {
+                // جلوگیری از اوررایت شدن فیلدهای کلیدی و تصویر شاخص در این حلقه عمومی
+                if (in_array($meta_key, array('sahab_uuid', 'sahab_version_number', 'sahab_content_hash', 'subject', 'attachment_file_1', 'attachment_file_2', 'attachment_file_3', '_thumbnail_id'))) {
                     continue;
+                }
+
+                // نگاشت داینامیک کاربر ثبت‌کننده خبر به کاربر معادل در مقصد
+                if ($meta_key === 'news_creator_id' && !empty($data['creator_username'])) {
+                    $target_creator = get_user_by('login', $data['creator_username']);
+                    if ($target_creator) {
+                        $meta_value = $target_creator->ID;
+                    }
                 }
 
                 if ($meta_key === 'reports_to') {
@@ -282,16 +295,16 @@ class Sahab_Sync_Importer
                 $c_uuid = sanitize_text_field($c_data['comment_uuid']);
 
                 $existing_comments = get_comments(array(
-                    'meta_key'   => 'sahab_comment_uuid',
+                    'meta_key' => 'sahab_comment_uuid',
                     'meta_value' => $c_uuid,
-                    'status'     => 'any',
-                    'fields'     => 'ids'
+                    'status' => 'any',
+                    'fields' => 'ids'
                 ));
 
                 $comment_arr = array(
-                    'comment_post_ID'  => $post_id,
-                    'comment_author'   => sanitize_text_field($c_data['author']),
-                    'comment_content'  => wp_kses_post($c_data['content']),
+                    'comment_post_ID' => $post_id,
+                    'comment_author' => sanitize_text_field($c_data['author']),
+                    'comment_content' => wp_kses_post($c_data['content']),
                     'comment_date_gmt' => sanitize_text_field($c_data['date_gmt']),
                     'comment_approved' => 1,
                 );
@@ -312,7 +325,7 @@ class Sahab_Sync_Importer
             }
         }
 
-        // همگام‌سازی دسته‌بندی‌ها و تگ‌ها
+        // همگام‌سازی دسته‌ب بندی‌ها و تگ‌ها
         if (!empty($data['taxonomies']) && is_array($data['taxonomies'])) {
             foreach ($data['taxonomies'] as $taxonomy => $terms) {
                 if (taxonomy_exists($taxonomy)) {
@@ -321,46 +334,44 @@ class Sahab_Sync_Importer
             }
         }
 
-        // ۶. پردازش و درون‌ریزی دقیق رونوشت‌ها (Revisions) در سایت مقصد
+        // ۶. پردازش و ورود تضمینی رونوشت‌ها (Revisions) با دور زدن محدودیت هسته
         if (!empty($data['revisions']) && is_array($data['revisions'])) {
             foreach ($data['revisions'] as $revision_data) {
-                // بررسی جهت جلوگیری از درج رونوشت تکراری بر اساس تاریخ
-                $existing_revision = get_posts(array(
-                    'post_type'      => 'revision',
-                    'post_status'    => 'inherit',
-                    'post_parent'    => $post_id,
-                    'date_query'     => array(
-                        array('column' => 'post_date', 'value' => $revision_data['date'])
-                    ),
-                    'posts_per_page' => 1,
-                    'fields'         => 'ids'
+                $existing_revision = $wpdb->get_var($wpdb->prepare(
+                    "SELECT ID FROM $wpdb->posts WHERE post_type = 'revision' AND post_parent = %d AND post_date = %s",
+                    $post_id,
+                    $revision_data['date']
                 ));
 
-                if (empty($existing_revision)) {
-                    // ایجاد نامک (slug) استاندارد برای رونوشت بر اساس شناسه پست اصلی و تاریخ
-                    $revision_name = $post_id . '-revision-v1'; 
-                    
-                    $revision_post = array(
-                        'post_title'   => sanitize_text_field($revision_data['title']),
+                if (!$existing_revision) {
+                    // درج موقت به عنوان پست عادی برای عبور از فیلترهای وردپرس
+                    $temp_post_id = wp_insert_post(array(
+                        'post_title' => sanitize_text_field($revision_data['title']),
                         'post_content' => wp_kses_post($revision_data['content']),
                         'post_excerpt' => sanitize_text_field($revision_data['excerpt']),
-                        'post_status'  => 'inherit',
-                        'post_type'    => 'revision',
-                        'post_parent'  => $post_id,
-                        'post_name'    => $revision_name,
-                        'post_date'    => sanitize_text_field($revision_data['date']),
-                        'post_date_gmt'=> get_gmt_from_date($revision_data['date']),
-                    );
-                    
-                    // دور زدن محدودیت‌های احتمالی wp_config برای Revisions در هنگام همگام‌سازی ابری/سیستم‌ها
-                    add_filter('wp_revisions_to_keep', '__return_minus_one', 999);
-                    wp_insert_post($revision_post);
-                    remove_filter('wp_revisions_to_keep', '__return_minus_one', 999);
+                        'post_status' => 'inherit',
+                        'post_type' => 'post',
+                        'post_parent' => $post_id,
+                        'post_date' => sanitize_text_field($revision_data['date']),
+                        'post_date_gmt' => get_gmt_from_date($revision_data['date']),
+                    ));
+
+                    if ($temp_post_id && !is_wp_error($temp_post_id)) {
+                        // تبدیل فیزیکی نوع پست در دیتابیس به داده‌ی ریل و معتبر Revision
+                        $wpdb->update(
+                            $wpdb->posts,
+                            array(
+                                'post_type' => 'revision',
+                                'post_name' => $post_id . '-revision-v1'
+                            ),
+                            array('ID' => $temp_post_id)
+                        );
+                    }
                 }
             }
         }
 
-        // درون‌ریزی تصویر شاخص در صورت وجود در پوشه media پکیج
+        // ۷. پردازش و درون‌ریزی دقیق تصویر شاخص (Thumbnail)
         if (isset($data['metadata']['_thumbnail_id']) && !empty($data['metadata']['_thumbnail_id'])) {
             $thumb_value = $data['metadata']['_thumbnail_id'];
             $thumb_filename = basename($thumb_value);
@@ -368,7 +379,7 @@ class Sahab_Sync_Importer
 
             if (file_exists($thumb_path)) {
                 $attach_id = $this->insert_file_to_wp_media($thumb_path, $post_id);
-                if ($attach_id) {
+                if ($attach_id && !is_wp_error($attach_id)) {
                     set_post_thumbnail($post_id, $attach_id);
                 }
             }
@@ -387,11 +398,11 @@ class Sahab_Sync_Importer
         if (copy($file_path, $target_path)) {
             $filetype = wp_check_filetype($filename, null);
             $attachment = array(
-                'guid'           => $wp_upload_dir['url'] . '/' . $filename,
+                'guid' => $wp_upload_dir['url'] . '/' . $filename,
                 'post_mime_type' => $filetype['type'],
-                'post_title'     => preg_replace('/\.[^.]+$/', '', $filename),
-                'post_content'   => '',
-                'post_status'    => 'inherit'
+                'post_title' => preg_replace('/\.[^.]+$/', '', $filename),
+                'post_content' => '',
+                'post_status' => 'inherit'
             );
 
             $attach_id = wp_insert_attachment($attachment, $target_path, $post_id);
