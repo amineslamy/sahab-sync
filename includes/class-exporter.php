@@ -3,9 +3,11 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-class Sahab_Sync_Exporter {
+class Sahab_Sync_Exporter
+{
 
-    public function __construct() {
+    public function __construct()
+    {
         // تغییر نام اکشن جهت یکپارچگی کامل با درخواست فرم جاوااسکریپت فرانت‌اند
         add_action('wp_ajax_sahab_sync_export_download', array($this, 'handle_direct_post_export'));
     }
@@ -13,7 +15,8 @@ class Sahab_Sync_Exporter {
     /**
      * هندلر مستقیم پردازش فیلترها، ساخت زیپ و دانلود آن آنی مرورگر
      */
-    public function handle_direct_post_export() {
+    public function handle_direct_post_export()
+    {
         if (!current_user_can('manage_options')) {
             wp_send_json_error('دسترسی غیرمجاز.', 403);
         }
@@ -21,21 +24,15 @@ class Sahab_Sync_Exporter {
         // دریافت و پاکسازی فیلترهای ارسالی از فرم فرانت‌اِند
         $filters = array(
             'f_date_from' => isset($_POST['f_date_from']) ? sanitize_text_field($_POST['f_date_from']) : '',
-            'f_date_to'   => isset($_POST['f_date_to']) ? sanitize_text_field($_POST['f_date_to']) : '',
-            'f_id'        => isset($_POST['f_id']) ? sanitize_text_field($_POST['f_id']) : '',
-            'f_case'      => isset($_POST['f_case']) ? sanitize_text_field($_POST['f_case']) : '',
-            'f_type'      => isset($_POST['f_type']) ? sanitize_text_field($_POST['f_type']) : '',
-            'f_subject'   => isset($_POST['f_subject']) ? sanitize_text_field($_POST['f_subject']) : '',
-            'f_expert'    => isset($_POST['f_expert']) ? sanitize_text_field($_POST['f_expert']) : '',
-            'f_author'    => isset($_POST['f_author']) ? sanitize_text_field($_POST['f_author']) : '',
-            'f_notes'     => isset($_POST['f_notes']) ? sanitize_text_field($_POST['f_notes']) : '',
+            'f_date_to' => isset($_POST['f_date_to']) ? sanitize_text_field($_POST['f_date_to']) : '',
+            'f_id' => isset($_POST['f_id']) ? sanitize_text_field($_POST['f_id']) : '',
+            'f_case' => isset($_POST['f_case']) ? sanitize_text_field($_POST['f_case']) : '',
+            'f_type' => isset($_POST['f_type']) ? sanitize_text_field($_POST['f_type']) : '',
+            'f_subject' => isset($_POST['f_subject']) ? sanitize_text_field($_POST['f_subject']) : '',
+            'f_expert' => isset($_POST['f_expert']) ? sanitize_text_field($_POST['f_expert']) : '',
+            'f_author' => isset($_POST['f_author']) ? sanitize_text_field($_POST['f_author']) : '',
+            'f_notes' => isset($_POST['f_notes']) ? sanitize_text_field($_POST['f_notes']) : '',
         );
-
-        $has_filters = !empty($filters['f_date_from']) || !empty($filters['f_date_to']) ||
-            !empty($filters['f_case']) || !empty($filters['f_type']) ||
-            !empty($filters['f_subject']) || !empty($filters['f_expert']) ||
-            !empty($filters['f_author']) || !empty($filters['f_notes']) ||
-            !empty($filters['f_id']);
 
         // استفاده از متد فیلترینگ پیشرفته بومی سحاب جهت گلچین کردن پست‌ها
         $target_ids = array();
@@ -48,7 +45,7 @@ class Sahab_Sync_Exporter {
         }
 
         $upload_dir = wp_upload_dir();
-        
+
         // پاکسازی فایل‌های زیپ موقت قدیمی
         $sync_dir = $upload_dir['basedir'] . '/sahab-sync-temp';
         if (file_exists($sync_dir) && is_dir($sync_dir)) {
@@ -65,7 +62,8 @@ class Sahab_Sync_Exporter {
         // واکشی اطلاعات اخبار گلچین شده فیلتر
         foreach ($target_ids as $post_id) {
             $post = get_post($post_id);
-            if (!$post) continue;
+            if (!$post)
+                continue;
 
             // ۱. مدیریت و تضمین وجود UUID
             $uuid = get_post_meta($post_id, 'sahab_uuid', true);
@@ -86,7 +84,7 @@ class Sahab_Sync_Exporter {
 
             if (!empty($meta_keys)) {
                 foreach ($meta_keys as $key => $values) {
-                    // فیلتر کردن صرفاً متادیتای سیستمی بسیار خاص وردپرس که مشکل‌ساز هستند
+                    // فیلتر کردن صرفاً متادیتای سیستمی بسیار خاص وردپرس
                     if (in_array($key, array('_edit_lock', '_edit_last'))) {
                         continue;
                     }
@@ -94,15 +92,15 @@ class Sahab_Sync_Exporter {
                 }
             }
 
-            $title   = $post->post_title;
+            $title = $post->post_title;
             $content = $post->post_content;
-            
+
             // ۳. تولید هش محتوا
             $hash_base = $title . $content . json_encode($clean_meta);
             $content_hash = md5($hash_base);
             update_post_meta($post_id, 'sahab_content_hash', $content_hash);
 
-            // ====== بخش جدید: واکشی اختصاصی فایل‌های پیوست سه‌گانه سحاب ======
+            // ====== واکشی اختصاصی فایل‌های پیوست سه‌گانه سحاب ======
             for ($i = 1; $i <= 3; $i++) {
                 $attachment_id = get_post_meta($post_id, "attachment_file_{$i}", true);
                 if (!empty($attachment_id)) {
@@ -118,11 +116,11 @@ class Sahab_Sync_Exporter {
                 }
             }
 
-            // ====== بخش جدید: واکشی کامنت‌های ساختاریافته به همراه متادیتای تحلیلی ======
+            // ====== واکشی کامنت‌های ساختاریافته ======
             $structured_comments = array();
             $comments_query = get_comments(array(
                 'post_id' => $post_id,
-                'status'  => 'approve'
+                'status' => 'approve'
             ));
 
             foreach ($comments_query as $comment) {
@@ -139,25 +137,45 @@ class Sahab_Sync_Exporter {
 
                 $structured_comments[] = array(
                     'comment_uuid' => $comment_uuid,
-                    'author'       => $comment->comment_author,
-                    'content'      => $comment->comment_content,
-                    'date_gmt'     => $comment->comment_date_gmt,
+                    'author' => $comment->comment_author,
+                    'content' => $comment->comment_content,
+                    'date_gmt' => $comment->comment_date_gmt,
                     'analysis_metadata' => array(
                         'comment_type' => $comment_type ? $comment_type : ''
                     )
                 );
             }
 
-            // ====== بخش جدید: استخراج رونوشت‌های پست برای همگام‌سازی ساختار تاریخی ======
+            // ====== واکشی و ساختاردهی همه‌جانبه رونوشت‌ها (Revisions) ======
             $revisions_data = array();
             $revisions = wp_get_post_revisions($post_id);
             if (!empty($revisions)) {
                 foreach ($revisions as $revision) {
+                    // استخراج یوزرنیم نویسنده واقعی این رونوشت خاص جهت جلوگیری از انتساب به کاربر مقصد
+                    $rev_author_user = get_userdata($revision->post_author);
+                    $rev_author_username = $rev_author_user ? $rev_author_user->user_login : '';
+
+                    // تولید Shadow Snapshot شامل تمام متادیتاها و تاکسونومی‌های زمان وقوع این رونوشت
+                    $snapshot_meta = array();
+                    $rev_meta_keys = get_metadata('post', $revision->ID);
+                    if (!empty($rev_meta_keys)) {
+                        foreach ($rev_meta_keys as $r_key => $r_values) {
+                            $snapshot_meta[$r_key] = get_metadata('post', $revision->ID, $r_key, true);
+                        }
+                    }
+
+                    $snapshot_data = array(
+                        'metadata' => $snapshot_meta,
+                        'taxonomies' => $this->get_post_taxonomies_data($post_id) // وضعیت دسته‌بندی‌ها
+                    );
+
                     $revisions_data[] = array(
-                        'title'   => $revision->post_title,
+                        'title' => $revision->post_title,
                         'content' => $revision->post_content,
                         'excerpt' => $revision->post_excerpt,
-                        'date'    => $revision->post_date
+                        'date' => $revision->post_date,
+                        'author_username' => $rev_author_username, // افزوده شد
+                        'sahab_revision_snapshot' => json_encode($snapshot_data, JSON_UNESCAPED_UNICODE) // پکیج سایه
                     );
                 }
             }
@@ -176,24 +194,6 @@ class Sahab_Sync_Exporter {
                 }
             }
 
-            $export_data[] = array(
-                'uuid'                 => $uuid,
-                'version'              => (int)$version,
-                'content_hash'         => $content_hash,
-                'title'                => $title,
-                'content'              => $content,
-                'excerpt'              => $post->post_excerpt,
-                'status'               => $post->post_status,
-                'date'                 => $post->post_date,
-                'last_modified'        => $post->post_modified,
-                'author_username'      => $author_username,
-                'creator_username'     => $creator_username,
-                'metadata'             => $clean_meta,
-                'taxonomies'           => $this->get_post_taxonomies_data($post_id),
-                'structured_comments'  => $structured_comments,
-                'revisions'            => $revisions_data
-            );
-
             // واکشی تصاویر شاخص
             if (has_post_thumbnail($post_id)) {
                 $thumb_id = get_post_thumbnail_id($post_id);
@@ -208,7 +208,7 @@ class Sahab_Sync_Exporter {
                 }
             }
 
-            // واکشی ضمایم
+            // واکشی ضمایم عمومی
             $attachments = get_attached_media('', $post_id);
             if (!empty($attachments)) {
                 foreach ($attachments as $attachment) {
@@ -221,9 +221,27 @@ class Sahab_Sync_Exporter {
                     }
                 }
             }
+
+            $export_data[] = array(
+                'uuid' => $uuid,
+                'version' => (int) $version,
+                'content_hash' => $content_hash,
+                'title' => $title,
+                'content' => $content,
+                'excerpt' => $post->post_excerpt,
+                'status' => $post->post_status,
+                'date' => $post->post_date,
+                'last_modified' => $post->post_modified,
+                'author_username' => $author_username,
+                'creator_username' => $creator_username,
+                'metadata' => $clean_meta,
+                'taxonomies' => $this->get_post_taxonomies_data($post_id),
+                'structured_comments' => $structured_comments,
+                'revisions' => $revisions_data
+            );
         }
 
-        // ایجاد فایل فشرده
+        // ایجاد فایل فشرده زیپ
         if (!file_exists($sync_dir)) {
             wp_mkdir_p($sync_dir);
         }
@@ -267,7 +285,8 @@ class Sahab_Sync_Exporter {
         wp_die('خطا در تولید فایل پکیج همگام‌سازی.');
     }
 
-    private function get_post_taxonomies_data($post_id) {
+    private function get_post_taxonomies_data($post_id)
+    {
         $taxonomies = get_object_taxonomies('post');
         $output = array();
         foreach ($taxonomies as $tax) {

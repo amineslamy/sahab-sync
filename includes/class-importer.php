@@ -97,7 +97,7 @@ class Sahab_Sync_Importer
                     continue;
                 }
 
-                // اگر نسخه ورودی جدیدتر یا مساوی بود، Overwrite انجام می‌شود و وردپرس اتوماتیک Revision می‌سازد
+                // اگر نسخه ورودی جدیدتر یا مساوی بود، Overwrite انجام می‌شود
                 if ($incoming_version >= $current_version) {
                     // افزایش شماره نسخه یکی بیشتر از ماکزیمم دو نود برای هماهنگی زنجیره ورژن‌ها
                     $new_version = max($incoming_version, $current_version) + 1;
@@ -105,7 +105,7 @@ class Sahab_Sync_Importer
                     $this->update_existing_post($post_id, $post_data, $new_version, $incoming_hash, $extract_dir);
                     $updated_count++;
                 } else {
-                    // نسخه ورودی قدیمی‌تر از نسخه لوکال جاری است؛ پس نادیده گرفته می‌شود
+                    // نسخه ورودی قدیمی‌تر از نسخه لوکال جاری است
                     $skipped_count++;
                 }
             } else {
@@ -132,7 +132,6 @@ class Sahab_Sync_Importer
                 'skipped' => $skipped_count
             ));
         } else {
-            // در صورتی که تمام پکیج تکراری باشد، به عنوان موفقیت بدون تغییر به فرانت‌اِند پاس داده می‌شود تا دکمه قفل نگردد
             wp_send_json_success(array(
                 'message' => "اطلاعات این پکیج کاملاً با داده‌های فعلی سامانه یکسان است.\nهیچ داده جدید یا تغییریافته‌ای جهت درون‌ریزی یافت نشد (تعداد کل اخبار بررسی شده: {$skipped_count}).",
                 'imported' => 0,
@@ -259,12 +258,10 @@ class Sahab_Sync_Importer
         // ۴. ذخیره‌سازی سایر متادیتاها و اصلاح فیلد ثبت‌کننده (news_creator_id)
         if (!empty($data['metadata']) && is_array($data['metadata'])) {
             foreach ($data['metadata'] as $meta_key => $meta_value) {
-                // جلوگیری از اوررایت شدن فیلدهای کلیدی و تصویر شاخص در این حلقه عمومی
                 if (in_array($meta_key, array('sahab_uuid', 'sahab_version_number', 'sahab_content_hash', 'subject', 'attachment_file_1', 'attachment_file_2', 'attachment_file_3', '_thumbnail_id'))) {
                     continue;
                 }
 
-                // نگاشت داینامیک کاربر ثبت‌کننده خبر به کاربر معادل در مقصد
                 if ($meta_key === 'news_creator_id' && !empty($data['creator_username'])) {
                     $target_creator = get_user_by('login', $data['creator_username']);
                     if ($target_creator) {
@@ -325,7 +322,7 @@ class Sahab_Sync_Importer
             }
         }
 
-        // همگام‌سازی دسته‌ب بندی‌ها و تگ‌ها
+        // همگام‌سازی دسته‌بندی‌ها و تگ‌ها برای خبر اصلی
         if (!empty($data['taxonomies']) && is_array($data['taxonomies'])) {
             foreach ($data['taxonomies'] as $taxonomy => $terms) {
                 if (taxonomy_exists($taxonomy)) {
@@ -334,7 +331,7 @@ class Sahab_Sync_Importer
             }
         }
 
-        // ۶. پردازش و ورود تضمینی رونوشت‌ها (Revisions) با دور زدن محدودیت هسته
+        // ۶. پردازش و ورود تضمینی رونوشت‌ها (Revisions) با حفظ دقیق نویسنده و ساختار سایه
         if (!empty($data['revisions']) && is_array($data['revisions'])) {
             foreach ($data['revisions'] as $revision_data) {
                 $existing_revision = $wpdb->get_var($wpdb->prepare(
@@ -344,7 +341,7 @@ class Sahab_Sync_Importer
                 ));
 
                 if (!$existing_revision) {
-                    // درج موقت به عنوان پست عادی برای عبور از فیلترهای وردپرس
+                    // درج موقت به عنوان پست عادی برای دور زدن فیلترهای پیش‌فرض هسته وردپرس
                     $temp_post_id = wp_insert_post(array(
                         'post_title' => sanitize_text_field($revision_data['title']),
                         'post_content' => wp_kses_post($revision_data['content']),
@@ -357,27 +354,84 @@ class Sahab_Sync_Importer
                     ));
 
                     if ($temp_post_id && !is_wp_error($temp_post_id)) {
-                        // تبدیل فیزیکی نوع پست در دیتابیس به داده‌ی ریل و معتبر Revision
+                        // تعیین نویسنده واقعی رونوشت بر اساس یوزرنیم دریافتی از مبدا جهت جلوگیری از انتساب به کاربر ایمپورت کننده
+                        $revision_author_id = 0;
+                        if (!empty($revision_data['author_username'])) {
+                            $rev_user = get_user_by('login', $revision_data['author_username']);
+                            if ($rev_user) {
+                                $revision_author_id = $rev_user->ID;
+                            }
+                        }
+
+                        // در صورت عدم تطابق نام کاربری، از نویسنده اصلی خبر به عنوان بک‌آپ استفاده می‌شود
+                        if ($revision_author_id === 0 && !empty($data['author_username'])) {
+                            $main_author = get_user_by('login', $data['author_username']);
+                            if ($main_author) {
+                                $revision_author_id = $main_author->ID;
+                            }
+                        }
+
+                        // تبدیل فیزیکی نوع پست در دیتابیس به داده‌ی ریل و معتبر Revision همراه با درج شناسه نویسنده واقعی رونوشت
                         $wpdb->update(
                             $wpdb->posts,
                             array(
                                 'post_type' => 'revision',
-                                'post_name' => $post_id . '-revision-v1'
+                                'post_name' => $post_id . '-revision-v1',
+                                'post_author' => $revision_author_id
                             ),
                             array('ID' => $temp_post_id)
                         );
+
+                        // بازسازی لایه متادیتاها و تاکسونومی‌های زمان ثبت رونوشت (Shadow Revision)
+                        if (!empty($revision_data['sahab_revision_snapshot'])) {
+                            $snapshot = json_decode($revision_data['sahab_revision_snapshot'], true);
+                            if (is_array($snapshot)) {
+                                // تزریق کاستوم فیلدهای متادیتا به خودِ شناسه رونوشت
+                                if (!empty($snapshot['metadata']) && is_array($snapshot['metadata'])) {
+                                    foreach ($snapshot['metadata'] as $s_meta_key => $s_meta_value) {
+                                        update_metadata('post', $temp_post_id, $s_meta_key, $s_meta_value);
+                                    }
+                                }
+                                // همگام‌سازی دسته‌بندی‌های زمان وقوع رونوشت روی رکورد رونوشت
+                                if (!empty($snapshot['taxonomies']) && is_array($snapshot['taxonomies'])) {
+                                    foreach ($snapshot['taxonomies'] as $s_tax => $s_terms) {
+                                        if (taxonomy_exists($s_tax)) {
+                                            wp_set_object_terms($temp_post_id, $s_terms, $s_tax, false);
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
 
-        // ۷. پردازش و درون‌ریزی دقیق تصویر شاخص (Thumbnail)
+        // ۷. پردازش و درون‌ریزی دقیق تصویر شاخص (Thumbnail) بر اساس اسکن پکیج
         if (isset($data['metadata']['_thumbnail_id']) && !empty($data['metadata']['_thumbnail_id'])) {
             $thumb_value = $data['metadata']['_thumbnail_id'];
             $thumb_filename = basename($thumb_value);
+
+            // اگر مقدار صرفاً یک آی‌دی فیزیکی بود، پوشه مدیا را اسکن کرده تا فایل تصویر مربوطه را بیابیم
+            if (is_numeric($thumb_filename) && file_exists($media_folder)) {
+                $possible_files = glob($media_folder . '/*');
+                if (!empty($possible_files)) {
+                    foreach ($possible_files as $p_file) {
+                        $p_base = pathinfo($p_file, PATHINFO_FILENAME);
+                        if (strpos($p_base, 'thumb') !== false || $p_base == $thumb_filename) {
+                            $thumb_filename = basename($p_file);
+                            break;
+                        }
+                    }
+                    if (is_numeric($thumb_filename) && isset($possible_files[0])) {
+                        $thumb_filename = basename($possible_files[0]);
+                    }
+                }
+            }
+
             $thumb_path = $media_folder . '/' . $thumb_filename;
 
-            if (file_exists($thumb_path)) {
+            if (file_exists($thumb_path) && !is_dir($thumb_path)) {
                 $attach_id = $this->insert_file_to_wp_media($thumb_path, $post_id);
                 if ($attach_id && !is_wp_error($attach_id)) {
                     set_post_thumbnail($post_id, $attach_id);
@@ -386,9 +440,6 @@ class Sahab_Sync_Importer
         }
     }
 
-    /**
-     * متد کمکی جدید جهت تزریق تمیز فایل فیزیکی به رسانه‌های وردپرس و تولید متاداده آن
-     */
     private function insert_file_to_wp_media($file_path, $post_id)
     {
         $filename = basename($file_path);
