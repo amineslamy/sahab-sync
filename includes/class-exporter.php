@@ -81,21 +81,16 @@ class Sahab_Sync_Exporter {
                 update_post_meta($post_id, 'sahab_version_number', $version);
             }
 
-            // واکشی امن و استاندارد متادیتاها با حفظ ساختار آرایه‌ها و داده‌های سریالایز شده
             $clean_meta = array();
-            $meta_keys = get_post_meta($post_id); // دریافت لیست تمام کلیدهای متای این پست
+            $meta_keys = get_post_meta($post_id);
 
             if (!empty($meta_keys)) {
                 foreach ($meta_keys as $key => $values) {
-                    // نادیده گرفتن متادیتاهای مخفی سیستم، به جز تصویر شاخص و تاریخ شمسی سحاب
-                    if (strpos($key, '_') === 0 && !in_array($key, array('_thumbnail_id', '_sahab_reg_date_shamsi'))) {
+                    // فیلتر کردن صرفاً متادیتای سیستمی بسیار خاص وردپرس که مشکل‌ساز هستند
+                    if (in_array($key, array('_edit_lock', '_edit_last'))) {
                         continue;
                     }
-
-                    // استفاده از get_post_meta استاندارد به همراه تبدیل خودکار داده‌های سریالایز شده به آرایه واقعی
-                    $meta_value = get_post_meta($post_id, $key, true);
-
-                    $clean_meta[$key] = $meta_value;
+                    $clean_meta[$key] = get_post_meta($post_id, $key, true);
                 }
             }
 
@@ -113,10 +108,12 @@ class Sahab_Sync_Exporter {
                 if (!empty($attachment_id)) {
                     $file_path = get_attached_file($attachment_id);
                     if ($file_path && file_exists($file_path)) {
-                        $media_files[basename($file_path)] = array(
+                        $file_basename = basename($file_path);
+                        $media_files[$file_basename] = array(
                             'absolute_path' => $file_path,
-                            'relative_path' => 'media/' . basename($file_path)
+                            'relative_path' => 'media/' . $file_basename
                         );
+                        $clean_meta["attachment_file_{$i}"] = $file_basename;
                     }
                 }
             }
@@ -151,6 +148,20 @@ class Sahab_Sync_Exporter {
                 );
             }
 
+            // ====== بخش جدید: استخراج رونوشت‌های پست برای همگام‌سازی ساختار تاریخی ======
+            $revisions_data = array();
+            $revisions = wp_get_post_revisions($post_id);
+            if (!empty($revisions)) {
+                foreach ($revisions as $revision) {
+                    $revisions_data[] = array(
+                        'title'   => $revision->post_title,
+                        'content' => $revision->post_content,
+                        'excerpt' => $revision->post_excerpt,
+                        'date'    => $revision->post_date
+                    );
+                }
+            }
+
             $export_data[] = array(
                 'uuid'          => $uuid,
                 'version'       => (int)$version,
@@ -163,7 +174,8 @@ class Sahab_Sync_Exporter {
                 'last_modified' => $post->post_modified,
                 'metadata'      => $clean_meta,
                 'taxonomies'    => $this->get_post_taxonomies_data($post_id),
-                'structured_comments' => $structured_comments
+                'structured_comments' => $structured_comments,
+                'revisions'     => $revisions_data
             );
 
             // واکشی تصاویر شاخص
@@ -171,10 +183,12 @@ class Sahab_Sync_Exporter {
                 $thumb_id = get_post_thumbnail_id($post_id);
                 $thumb_path = get_attached_file($thumb_id);
                 if ($thumb_path && file_exists($thumb_path)) {
-                    $media_files[basename($thumb_path)] = array(
+                    $thumb_basename = basename($thumb_path);
+                    $media_files[$thumb_basename] = array(
                         'absolute_path' => $thumb_path,
-                        'relative_path' => 'media/' . basename($thumb_path)
+                        'relative_path' => 'media/' . $thumb_basename
                     );
+                    $clean_meta['_thumbnail_id'] = $thumb_basename;
                 }
             }
 

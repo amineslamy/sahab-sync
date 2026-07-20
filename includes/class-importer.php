@@ -321,6 +321,45 @@ class Sahab_Sync_Importer
             }
         }
 
+        // ۶. پردازش و درون‌ریزی دقیق رونوشت‌ها (Revisions) در سایت مقصد
+        if (!empty($data['revisions']) && is_array($data['revisions'])) {
+            foreach ($data['revisions'] as $revision_data) {
+                // بررسی جهت جلوگیری از درج رونوشت تکراری بر اساس تاریخ
+                $existing_revision = get_posts(array(
+                    'post_type'      => 'revision',
+                    'post_status'    => 'inherit',
+                    'post_parent'    => $post_id,
+                    'date_query'     => array(
+                        array('column' => 'post_date', 'value' => $revision_data['date'])
+                    ),
+                    'posts_per_page' => 1,
+                    'fields'         => 'ids'
+                ));
+
+                if (empty($existing_revision)) {
+                    // ایجاد نامک (slug) استاندارد برای رونوشت بر اساس شناسه پست اصلی و تاریخ
+                    $revision_name = $post_id . '-revision-v1'; 
+                    
+                    $revision_post = array(
+                        'post_title'   => sanitize_text_field($revision_data['title']),
+                        'post_content' => wp_kses_post($revision_data['content']),
+                        'post_excerpt' => sanitize_text_field($revision_data['excerpt']),
+                        'post_status'  => 'inherit',
+                        'post_type'    => 'revision',
+                        'post_parent'  => $post_id,
+                        'post_name'    => $revision_name,
+                        'post_date'    => sanitize_text_field($revision_data['date']),
+                        'post_date_gmt'=> get_gmt_from_date($revision_data['date']),
+                    );
+                    
+                    // دور زدن محدودیت‌های احتمالی wp_config برای Revisions در هنگام همگام‌سازی ابری/سیستم‌ها
+                    add_filter('wp_revisions_to_keep', '__return_minus_one', 999);
+                    wp_insert_post($revision_post);
+                    remove_filter('wp_revisions_to_keep', '__return_minus_one', 999);
+                }
+            }
+        }
+
         // درون‌ریزی تصویر شاخص در صورت وجود در پوشه media پکیج
         if (isset($data['metadata']['_thumbnail_id']) && !empty($data['metadata']['_thumbnail_id'])) {
             $thumb_value = $data['metadata']['_thumbnail_id'];
